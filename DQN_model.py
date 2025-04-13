@@ -34,30 +34,86 @@ class SkipFrame(gym.Wrapper):
         return state, total_reward, terminated, truncated, info
 
 
-class DQN(nn.Module):
+# class DQN(nn.Module):
 
+#     def __init__(self, in_dim, out_dim):
+#         super().__init__()
+#         cannel_n, height, width = in_dim
+
+#         if height != 84 or width != 84:
+#             raise ValueError(f"DQN model requires input of a (84, 84)-shape. Input of a ({height, width})-shape was passed.")
+
+#         self.net = nn.Sequential(
+#             nn.Conv2d(in_channels=cannel_n, out_channels=16,
+#                       kernel_size=8, stride=4),
+#             nn.ReLU(),
+#             nn.Conv2d(in_channels=16, out_channels=32,
+#                       kernel_size=4, stride=2),
+#             nn.ReLU(),
+#             nn.Flatten(),
+#             nn.Linear(2592, 256),
+#             nn.ReLU(),
+#             nn.Linear(256, out_dim),
+#         )
+
+#     def forward(self, input):
+#         return self.net(input)
+
+import torch.nn.functional as F
+
+class DQN(nn.Module):
     def __init__(self, in_dim, out_dim):
         super().__init__()
-        cannel_n, height, width = in_dim
+        c, h, w = in_dim
 
-        if height != 84 or width != 84:
-            raise ValueError(f"DQN model requires input of a (84, 84)-shape. Input of a ({height, width})-shape was passed.")
+        if h != 84 or w != 84:
+            raise ValueError(f"DQN model requires (84, 84), got ({h}, {w})")
 
-        self.net = nn.Sequential(
-            nn.Conv2d(in_channels=cannel_n, out_channels=16,
-                      kernel_size=8, stride=4),
+        # Feature extractor (Conv Layers)
+        self.features = nn.Sequential(
+            nn.Conv2d(c, 32, kernel_size=8, stride=4),
             nn.ReLU(),
-            nn.Conv2d(in_channels=16, out_channels=32,
-                      kernel_size=4, stride=2),
+            nn.LayerNorm([32, 20, 20]),
+
+            nn.Conv2d(32, 64, kernel_size=4, stride=2),
             nn.ReLU(),
-            nn.Flatten(),
-            nn.Linear(2592, 256),
-            nn.ReLU(),
-            nn.Linear(256, out_dim),
+            nn.LayerNorm([64, 9, 9]),
+
+            nn.Flatten()
         )
 
-    def forward(self, input):
-        return self.net(input)
+        self.flat_dim = 64 * 9 * 9
+
+        # Value Stream
+        self.value_stream = nn.Sequential(
+            nn.Linear(self.flat_dim, 256),
+            nn.ReLU(),
+            nn.Linear(256, 1)
+        )
+
+        # Advantage Stream
+        self.adv_stream = nn.Sequential(
+            nn.Linear(self.flat_dim, 256),
+            nn.ReLU(),
+            nn.Linear(256, out_dim)
+        )
+
+        # Weight initialization
+        self._init_weights()
+
+    def _init_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Linear) or isinstance(m, nn.Conv2d):
+                nn.init.kaiming_uniform_(m.weight, nonlinearity='relu')
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
+
+    def forward(self, x):
+        x = self.features(x)
+        value = self.value_stream(x)
+        adv = self.adv_stream(x)
+        q = value + adv - adv.mean(dim=1, keepdim=True)
+        return q
 
 
 class Agent:
@@ -95,7 +151,7 @@ class Agent:
         self.buffer = TensorDictReplayBuffer(
                 storage=LazyMemmapStorage(
                     300000,
-                    device=torch.device(self.device)))
+                    device=torch.device("cpu")))
         self.act_taken = 0
         self.n_updates = 0
         if load_state:
