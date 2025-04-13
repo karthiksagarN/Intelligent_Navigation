@@ -166,19 +166,35 @@ class Agent:
         loss = loss.item()
         return td_est, loss
 
-    def save(self, save_dir, save_name):
+    def save(self, save_dir, save_name, episode=None, timestep_n=None):
         if not os.path.exists(save_dir):
             os.makedirs(save_dir)
-        save_path = save_dir + save_name + f"_{self.act_taken}.pt"
+            
+        # Construct save filename
+        filename_parts = [save_name]
+        if timestep_n is not None:
+            filename_parts.append(f"ts{timestep_n}")
+        elif episode is not None:
+            filename_parts.append(f"ep{episode}")
+        else:
+            filename_parts.append(f"step{self.act_taken}")
+        filename = "_".join(filename_parts) + ".pt"
+        save_path = os.path.join(save_dir, filename)
+
+        # Save checkpoint
         torch.save({
             'upd_model_state_dict': self.updating_net.state_dict(),
             'frz_model_state_dict': self.frozen_net.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
-            'replay_buffer': self.buffer,
             'action_number': self.act_taken,
-            'epsilon': self.epsilon
-            }, save_path)
+            'epsilon': self.epsilon,
+            'n_updates': self.n_updates,
+            'episode': episode,
+            'timestep_n': timestep_n
+        }, save_path)
+
         print(f"Model saved to {save_path} at step {self.act_taken}")
+
 
     def load(self, load_dir, model_name):
         loaded_model = torch.load(load_dir+model_name)
